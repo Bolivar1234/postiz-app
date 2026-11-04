@@ -40,8 +40,11 @@ export class OrganizationRepository {
       if (!email || normalizeInvitationEmail(email) !== invite.email) {
         throw new Error('Invitation recipient does not match this account');
       }
-      const org = await tx.organization.findFirst({ where: { id: invite.orgId, deletedAt: null } });
+      const org = await tx.organization.findFirst({ where: { id: invite.orgId, deletedAt: null }, include: { subscription: true } });
       if (!org) throw new Error('Invitation organization is unavailable');
+      if (process.env.STRIPE_PUBLISHABLE_KEY && org.subscription?.subscriptionTier === SubscriptionTier.STANDARD) {
+        throw new Error('The organization plan does not include team members');
+      }
       // The conditional update takes the row lock. Membership and consumption commit together.
       const consumed = await tx.teamInvitation.updateMany({ where: {
         id: invite.id, organizationId: invite.orgId, email: invite.email,

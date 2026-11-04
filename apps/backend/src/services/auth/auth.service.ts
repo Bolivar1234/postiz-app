@@ -56,11 +56,13 @@ export class AuthService {
           if (body.email !== addToOrg.email) {
             throw new Error('Invitation recipient does not match this account');
           }
+          this._emailService.ensureConfigured();
           const accepted = await this._organizationService.createInvitedUser(body, addToOrg, ip, userAgent);
           const jwt = await this.jwt(accepted.user);
           await this._emailService.sendEmailSync(
             accepted.user.email, 'Activate your account',
-            `Click <a href="${process.env.FRONTEND_URL}/auth/activate/${jwt}">here</a> to activate your account`
+            `Click <a href="${process.env.FRONTEND_URL}/auth/activate/${jwt}">here</a> to activate your account`,
+            undefined, true
           );
           return { jwt, addedOrg: accepted.membership };
         }
@@ -271,7 +273,8 @@ export class AuthService {
     await this._emailService.sendEmailSync(
       user.email,
       'Activate your account',
-      `Click <a href="${process.env.FRONTEND_URL}/auth/activate/${jwt}">here</a> to activate your account`
+      `Click <a href="${process.env.FRONTEND_URL}/auth/activate/${jwt}">here</a> to activate your account`,
+      undefined, true
     );
 
     return true;
