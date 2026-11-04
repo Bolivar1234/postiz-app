@@ -62,11 +62,9 @@ elif a.phase=='promote':
  print('managed database cutover started; immutable app image preserved')
 elif a.phase=='retire':
  assert (P/'live-pass.json').exists() and (P/'managed-backup-pass.json').exists()
- dc(['stop','postiz-postgres','temporal-postgresql'])
  # Old Temporal credential appeared in one historical tool result; revoke login.
- run(['docker','start','qwntik-postiz-temporal-postgresql'])
  run(['docker','exec','qwntik-postiz-temporal-postgresql','psql','-U','temporal','-d','temporal','-v','ON_ERROR_STOP=1','-c','ALTER ROLE temporal NOLOGIN;'])
- run(['docker','stop','qwntik-postiz-temporal-postgresql'])
+ dc(['stop','postiz-postgres','temporal-postgresql'])
  print('old PostgreSQL containers stopped; both volumes retained; oldTemporalLOGIN disabled')
 else:
  assert not (P/'target-writes-started').exists(),'target accepted writes; reviewed reverse restore is mandatory'
