@@ -22,4 +22,4 @@ ARG SOURCE_REVISION
 LABEL org.opencontainers.image.source="https://github.com/Bolivar1234/postiz-app" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       org.qwntik.base.digest="sha256:1e376ff2cb781022d528f171719cf174cf693a985a30cb40eefb13eae3ddda13"
-CMD ["sh", "-c", "nginx && pnpm -r --parallel --filter ./apps/backend --filter ./apps/frontend --filter ./apps/orchestrator run pm2 && pm2 logs"]
+CMD ["sh", "-c", "nginx && pnpm --filter ./apps/backend run pm2 && pnpm --filter ./apps/frontend run pm2 && pnpm --filter ./apps/orchestrator run pm2 && pm2 logs"]
