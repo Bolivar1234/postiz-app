@@ -1,9 +1,9 @@
-name: Qwntik invitation and schema admission
+name: Qwntik invitation, schema and AI availability admission
 on:
   push:
-    branches: ['codex/het-34-*', 'codex/het-36-*']
+    branches: ['codex/het-34-*', 'codex/het-36-*', 'codex/het-37-*']
   pull_request:
-    branches: ['qwntik-v2.25.3', 'codex/het-35-centraldb']
+    branches: ['qwntik-v2.25.3', 'codex/het-35-centraldb', 'codex/het-36-one-db-schemas']
 permissions:
   contents: read
 defaults:
@@ -37,7 +37,7 @@ jobs:
       - name: Compile the exact source in the pinned runtime without exporting a large image
         run: |
           git rev-parse HEAD > receipts/source-sha.txt
-          sha256sum ops/het36/Dockerfile ops/het34/001-team-invitations.sql ops/het34/invitations.test.cjs ops/het36/mastra-schema.test.cjs > receipts/input-hashes.txt
+          sha256sum ops/het37/Dockerfile ops/het34/001-team-invitations.sql ops/het34/invitations.test.cjs ops/het36/mastra-schema.test.cjs ops/het37/copilot-availability.test.cjs > receipts/input-hashes.txt
           docker run -d --name het34-ci-app --network het34-ci --memory 6g \
             -e DATABASE_URL=postgresql://postgres:het34-isolated-fixture@db:5432/het34_invites \
             -e JWT_SECRET=het34-isolated-test-signing-key \
@@ -49,7 +49,7 @@ jobs:
           python3 - <<'PY'
           import hashlib, pathlib, posixpath, shlex, subprocess
           hashes = []
-          for line in pathlib.Path('ops/het36/Dockerfile').read_text().splitlines():
+          for line in pathlib.Path('ops/het37/Dockerfile').read_text().splitlines():
               if not line.startswith('COPY '):
                   continue
               instruction, source, destination = shlex.split(line)
@@ -63,7 +63,7 @@ jobs:
               if actual != expected:
                   raise SystemExit('Copied source hash mismatch')
               hashes.append(expected + '  ' + source)
-          if len(hashes) != 15:
+          if len(hashes) != 18:
               raise SystemExit('Unexpected production COPY input count')
           pathlib.Path('receipts/copied-source-hashes.txt').write_text('\n'.join(hashes) + '\n')
           PY
@@ -86,6 +86,10 @@ jobs:
           docker exec \
             -e DATABASE_URL='postgresql://het36_app:het36-isolated-fixture@db:5432/het36_schemas?schema=postiz' \
             het34-ci-app node --test ops/het36/mastra-schema.test.cjs 2>&1 | tee receipts/schema-tests.log
+      - name: Verify unconfigured AI returns a prompt explicit response without initializing agents
+        run: |
+          docker exec -e COPILOTKIT_TELEMETRY_DISABLED=true het34-ci-app \
+            node --test ops/het37/copilot-availability.test.cjs 2>&1 | tee receipts/ai-availability-tests.log
       - name: Upload exact-source receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
