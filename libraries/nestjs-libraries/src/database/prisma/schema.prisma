@@ -45,11 +45,26 @@ model Organization {
   webhooks            Webhooks[]
   oauthApp            OAuthApp[]
   oauthAuthorizations OAuthAuthorization[]
+  teamInvitations     TeamInvitation[]
 
   @@index([apiKey])
   @@index([streakSince])
   @@index([paymentId])
   @@index([deletedAt])
+}
+
+model TeamInvitation {
+  id             String       @id
+  organizationId String
+  email          String
+  role           Role
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  consumedBy     String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, email])
 }
 
 model Tags {

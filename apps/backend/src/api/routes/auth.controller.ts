@@ -38,9 +38,9 @@ export class AuthController {
   ) {}
 
   @Get('/can-register')
-  async canRegister() {
+  async canRegister(@Req() req: Request) {
     return {
-      register: await this._authService.canRegister(Provider.LOCAL as string),
+      register: await this._authService.canRegister(Provider.LOCAL as string, this._authService.getOrgFromCookie(req.cookies?.org)),
     };
   }
 

@@ -10,6 +10,7 @@ import dayjs from 'dayjs';
 import { ForgotReturnPasswordDto } from '@gitroom/nestjs-libraries/dtos/auth/forgot-return.password.dto';
 import { EmailService } from '@gitroom/nestjs-libraries/services/email.service';
 import { NewsletterService } from '@gitroom/nestjs-libraries/newsletter/newsletter.service';
+import { TeamInvitationClaims, parseTeamInvitation, normalizeInvitationEmail } from '@gitroom/helpers/auth/team-invitation';
 
 @Injectable()
 export class AuthService {
@@ -19,12 +20,13 @@ export class AuthService {
     private _emailService: EmailService,
     private _providerManager: AuthProviderManager
   ) {}
-  async canRegister(provider: string) {
-    if (
-      process.env.DISABLE_REGISTRATION !== 'true' ||
-      provider === Provider.GENERIC
-    ) {
+  async canRegister(provider: string, invite?: TeamInvitationClaims | false) {
+    if (process.env.DISABLE_REGISTRATION !== 'true') {
       return true;
+    }
+
+    if (provider === Provider.LOCAL && invite) {
+      return this._organizationService.pendingTeamInvitation(invite);
     }
 
     return (await this._organizationService.getCount()) === 0;
@@ -35,19 +37,34 @@ export class AuthService {
     body: CreateOrgUserDto | LoginUserDto,
     ip: string,
     userAgent: string,
-    addToOrg?: boolean | { orgId: string; role: 'USER' | 'ADMIN'; id: string }
+    addToOrg?: boolean | TeamInvitationClaims
   ) {
     if (provider === Provider.LOCAL) {
       if (process.env.DISALLOW_PLUS && body.email.includes('+')) {
         throw new Error('Email with plus sign is not allowed');
       }
       if (body instanceof CreateOrgUserDto) {
-        body.email = body.email.toLowerCase();
+        body.email = normalizeInvitationEmail(body.email);
       }
       const user = await this._userService.getUserByEmail(body.email);
       if (body instanceof CreateOrgUserDto) {
         if (user) {
           throw new Error('Email already exists');
+        }
+
+        if (addToOrg && typeof addToOrg !== 'boolean') {
+          if (body.email !== addToOrg.email) {
+            throw new Error('Invitation recipient does not match this account');
+          }
+          this._emailService.ensureConfigured();
+          const accepted = await this._organizationService.createInvitedUser(body, addToOrg, ip, userAgent);
+          const jwt = await this.jwt(accepted.user);
+          await this._emailService.sendEmailSync(
+            accepted.user.email, 'Activate your account',
+            `Click <a href="${process.env.FRONTEND_URL}/auth/activate/${jwt}">here</a> to activate your account`,
+            undefined, true
+          );
+          return { jwt, addedOrg: accepted.membership };
         }
 
         if (!(await this.canRegister(provider))) {
@@ -60,17 +77,7 @@ export class AuthService {
           userAgent
         );
 
-        const addedOrg =
-          addToOrg && typeof addToOrg !== 'boolean'
-            ? await this._organizationService.addUserToOrg(
-                create.users[0].user.id,
-                addToOrg.id,
-                addToOrg.orgId,
-                addToOrg.role
-              )
-            : false;
-
-        const obj = { addedOrg, jwt: await this.jwt(create.users[0].user) };
+        const obj = { addedOrg: false, jwt: await this.jwt(create.users[0].user) };
         await this._emailService.sendEmailSync(
           body.email,
           'Activate your account',
@@ -101,9 +108,7 @@ export class AuthService {
       addToOrg && typeof addToOrg !== 'boolean'
         ? await this._organizationService.addUserToOrg(
             user.id,
-            addToOrg.id,
-            addToOrg.orgId,
-            addToOrg.role
+            addToOrg
           )
         : false;
     return { addedOrg, jwt: await this.jwt(user) };
@@ -115,23 +120,7 @@ export class AuthService {
     }
 
     try {
-      const getOrg: any = AuthChecker.verifyJWT(cookie);
-      if (
-        typeof getOrg.orgId !== 'string' ||
-        typeof getOrg.id !== 'string' ||
-        !['USER', 'ADMIN'].includes(getOrg.role) ||
-        !getOrg.timeLimit ||
-        dayjs(getOrg.timeLimit).isBefore(dayjs())
-      ) {
-        return false;
-      }
-
-      return getOrg as {
-        email: string;
-        role: 'USER' | 'ADMIN';
-        orgId: string;
-        id: string;
-      };
+      return parseTeamInvitation(AuthChecker.verifyJWT(cookie));
     } catch (err) {
       return false;
     }
@@ -284,7 +273,8 @@ export class AuthService {
     await this._emailService.sendEmailSync(
       user.email,
       'Activate your account',
-      `Click <a href="${process.env.FRONTEND_URL}/auth/activate/${jwt}">here</a> to activate your account`
+      `Click <a href="${process.env.FRONTEND_URL}/auth/activate/${jwt}">here</a> to activate your account`,
+      undefined, true
     );
 
     return true;

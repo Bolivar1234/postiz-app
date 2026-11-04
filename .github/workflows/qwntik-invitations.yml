@@ -1,0 +1,85 @@
+name: Qwntik invitation admission
+on:
+  push:
+    branches: ['codex/het-34-*']
+  pull_request:
+    branches: ['qwntik-v2.25.3']
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: qwntik-invitations-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  exact-source-invitations:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Free unused hosted-runner toolchains for the pinned image build
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+      - name: Create isolated PostgreSQL fixture and apply reviewed additive migration
+        run: |
+          mkdir -p receipts
+          docker network create het34-ci
+          docker run -d --name het34-db --network het34-ci --network-alias db --tmpfs /var/lib/postgresql/data -e POSTGRES_PASSWORD=het34-isolated-fixture -e POSTGRES_DB=het34_invites postgres:17-alpine
+          for attempt in {1..30}; do
+            if docker exec het34-db pg_isready -U postgres -d het34_invites; then break; fi
+            sleep 1
+          done
+          docker run --rm --network het34-ci -e DATABASE_URL=postgresql://postgres:het34-isolated-fixture@db:5432/het34_invites ghcr.io/gitroomhq/postiz-app@sha256:1e376ff2cb781022d528f171719cf174cf693a985a30cb40eefb13eae3ddda13 sh -c 'pnpm exec prisma db push --schema libraries/nestjs-libraries/src/database/prisma/schema.prisma --skip-generate' 2>&1 | tee receipts/baseline-schema.log
+          docker image inspect ghcr.io/gitroomhq/postiz-app@sha256:1e376ff2cb781022d528f171719cf174cf693a985a30cb40eefb13eae3ddda13 > receipts/pinned-runtime-image.json
+          docker exec -i het34-db psql -U postgres -d het34_invites -v ON_ERROR_STOP=1 < ops/het34/001-team-invitations.sql 2>&1 | tee receipts/migration.log
+      - name: Compile the exact source in the pinned runtime without exporting a large image
+        run: |
+          git rev-parse HEAD > receipts/source-sha.txt
+          sha256sum ops/het34/Dockerfile ops/het34/001-team-invitations.sql ops/het34/invitations.test.cjs > receipts/input-hashes.txt
+          docker run -d --name het34-ci-app --network het34-ci --memory 6g \
+            -e DATABASE_URL=postgresql://postgres:het34-isolated-fixture@db:5432/het34_invites \
+            -e JWT_SECRET=het34-isolated-test-signing-key \
+            -e MAIN_URL=https://socials.qwntik.com -e FRONTEND_URL=https://socials.qwntik.com \
+            -e NEXT_PUBLIC_BACKEND_URL=https://socials.qwntik.com/api \
+            -e BACKEND_INTERNAL_URL=http://localhost:3000 -e DISABLE_REGISTRATION=true \
+            ghcr.io/gitroomhq/postiz-app@sha256:1e376ff2cb781022d528f171719cf174cf693a985a30cb40eefb13eae3ddda13 \
+            sh -c 'sleep infinity'
+          python3 - <<'PY'
+          import hashlib, pathlib, posixpath, shlex, subprocess
+          hashes = []
+          for line in pathlib.Path('ops/het34/Dockerfile').read_text().splitlines():
+              if not line.startswith('COPY '):
+                  continue
+              instruction, source, destination = shlex.split(line)
+              path = pathlib.Path(source)
+              if path.is_absolute() or '..' in path.parts or not path.is_file() or destination != '/app/' + source:
+                  raise SystemExit('Unsupported COPY instruction')
+              subprocess.run(['docker', 'exec', 'het34-ci-app', 'mkdir', '-p', posixpath.dirname(destination)], check=True)
+              subprocess.run(['docker', 'cp', source, 'het34-ci-app:' + destination], check=True)
+              expected = hashlib.sha256(path.read_bytes()).hexdigest()
+              actual = subprocess.check_output(['docker', 'exec', 'het34-ci-app', 'sha256sum', destination], text=True).split()[0]
+              if actual != expected:
+                  raise SystemExit('Copied source hash mismatch')
+              hashes.append(expected + '  ' + source)
+          if len(hashes) != 13:
+              raise SystemExit('Unexpected production COPY input count')
+          pathlib.Path('receipts/copied-source-hashes.txt').write_text('\n'.join(hashes) + '\n')
+          PY
+          docker exec het34-ci-app sh -c 'pnpm exec prisma generate --schema libraries/nestjs-libraries/src/database/prisma/schema.prisma && NODE_OPTIONS=--max-old-space-size=4096 pnpm run build:backend && NODE_OPTIONS=--max-old-space-size=4096 pnpm run build:frontend' 2>&1 | tee receipts/build.log
+      - name: Verify schema parity and actual transaction, HTTP, Next, and mail-failure boundaries
+        run: |
+          docker exec het34-ci-app sh -c 'pnpm exec prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel libraries/nestjs-libraries/src/database/prisma/schema.prisma --exit-code && node --test ops/het34/invitations.test.cjs' 2>&1 | tee receipts/tests.log
+      - name: Upload exact-source receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: invitations-${{ github.sha }}
+          path: receipts/
+          retention-days: 14
+      - name: Remove only this job's isolated fixture
+        if: always()
+        run: |
+          docker rm -f het34-ci-app het34-db || true
+          docker network rm het34-ci || true

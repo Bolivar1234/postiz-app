@@ -24,6 +24,13 @@ export class EmailService {
     return !(this.emailService instanceof EmptyProvider);
   }
 
+  ensureConfigured() {
+    if (!this.hasProvider() || !process.env.EMAIL_FROM_ADDRESS || !process.env.EMAIL_FROM_NAME ||
+      this.emailService.validateEnvKeys.some((key) => !process.env[key])) {
+      throw new Error('Email delivery is not fully configured');
+    }
+  }
+
   selectProvider(provider: string) {
     switch (provider) {
       case 'resend':
@@ -59,8 +66,10 @@ export class EmailService {
     to: string,
     subject: string,
     html: string,
-    replyTo?: string
+    replyTo?: string,
+    required = false
   ) {
+    if (required) this.ensureConfigured();
     if (to.indexOf('@') === -1) {
       return;
     }
@@ -148,5 +157,8 @@ export class EmailService {
       }
     }
     console.log(`Email to ${to} failed after 3 attempts:`, lastErr);
+    if (required) {
+      throw new Error('Activation email delivery failed; request a new activation email');
+    }
   }
 }
