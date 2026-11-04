@@ -1,8 +1,4 @@
 FROM ghcr.io/gitroomhq/postiz-app@sha256:1e376ff2cb781022d528f171719cf174cf693a985a30cb40eefb13eae3ddda13
-ARG SOURCE_REVISION
-LABEL org.opencontainers.image.source="https://github.com/Bolivar1234/postiz-app" \
-      org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      org.qwntik.base.digest="sha256:1e376ff2cb781022d528f171719cf174cf693a985a30cb40eefb13eae3ddda13"
 ENV MAIN_URL=https://socials.qwntik.com FRONTEND_URL=https://socials.qwntik.com \
     NEXT_PUBLIC_BACKEND_URL=https://socials.qwntik.com/api BACKEND_INTERNAL_URL=http://localhost:3000 \
     DISABLE_REGISTRATION=true
@@ -22,4 +18,8 @@ RUN pnpm exec prisma generate --schema libraries/nestjs-libraries/src/database/p
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm run build:backend
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm run build:frontend
 COPY ops/het34/invitations.test.cjs /app/ops/het34/invitations.test.cjs
-CMD ["sh", "-c", "nginx && pnpm run --parallel pm2 && pm2 logs"]
+ARG SOURCE_REVISION
+LABEL org.opencontainers.image.source="https://github.com/Bolivar1234/postiz-app" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.qwntik.base.digest="sha256:1e376ff2cb781022d528f171719cf174cf693a985a30cb40eefb13eae3ddda13"
+CMD ["sh", "-c", "nginx && pnpm -r --parallel --filter ./apps/backend --filter ./apps/frontend --filter ./apps/orchestrator run pm2 && pm2 logs"]
