@@ -21,9 +21,23 @@ if a.phase=='prepare':
  for project in ['postiz-central','postiz-temporal']:
   d=pathlib.Path('/opt/quantic-impact/clients')/project/'supabase/docker';f=d/'docker-compose.override.yml';b=P/(project+'-override.original.yml')
   if not b.exists():b.write_bytes(f.read_bytes())
-  o=yaml.safe_load(b.read_text());o.setdefault('networks',{})['postiz-managed']={'external':True,'name':NET}
-  o['services'].setdefault('db',{})['networks']={'default':{},'postiz-managed':{'aliases':[project+'-db']}}
-  f.write_text(yaml.safe_dump(o,sort_keys=False));run(['docker','compose','-p',project,'up','-d','--no-deps','db'],cwd=d)
+  # Supascale-generated COMPOSE_FILE=base suppresses automatic overrides.
+  # Keep service selection override intact and add a separate persistent network file.
+  f.write_bytes(b.read_bytes())
+  managed={'services':{'db':{'networks':{'default':{},'postiz-managed':{'aliases':[project+'-db']}}}},'networks':{'postiz-managed':{'external':True,'name':NET}}}
+  (d/'docker-compose.postiz-managed.yml').write_text(yaml.safe_dump(managed,sort_keys=False))
+  env=d/'.env';text=env.read_text();lines=text.splitlines();found=False
+  for i,line in enumerate(lines):
+   if line.startswith('COMPOSE_FILE='):
+    files=line.split('=',1)[1].strip().strip('"').strip("'").split(':')
+    for extra in ['docker-compose.override.yml','docker-compose.postiz-managed.yml']:
+     if extra not in files:files.append(extra)
+    lines[i]='COMPOSE_FILE='+':'.join(files);found=True
+  assert found,'missing supported COMPOSE_FILE authority'
+  env.write_text('\n'.join(lines)+'\n');env.chmod(0o600)
+  run(['docker','compose','-p',project,'up','-d','--no-deps','db'],cwd=d)
+  actual=json.loads(run(['docker','inspect',project+'-db-1']))[0]['NetworkSettings']['Networks']
+  assert NET in actual and project+'-db' in actual[NET]['Aliases'],'persistent managed network missing'
  c.setdefault('networks',{})['postiz-managed']={'external':True,'name':NET}
  app=c['services']['postiz'];app['environment']['DATABASE_URL']='postgresql://postiz_app:'+(P/'app-password.txt').read_text().strip()+'@postiz-central-db:57322/postgres'
  if isinstance(app['networks'],list):app['networks'].append('postiz-managed')
