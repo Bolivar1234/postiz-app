@@ -278,9 +278,7 @@ export class UsersController {
 
     const addedOrg = await this._orgService.addUserToOrg(
       user.id,
-      getOrgFromCookie.id,
-      getOrgFromCookie.orgId,
-      getOrgFromCookie.role
+      getOrgFromCookie
     );
 
     response.status(200).json({

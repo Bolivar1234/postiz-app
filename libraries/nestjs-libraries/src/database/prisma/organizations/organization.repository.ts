@@ -1,4 +1,5 @@
-import { PrismaRepository } from '@gitroom/nestjs-libraries/database/prisma/prisma.service';
+import { PrismaRepository, PrismaService } from '@gitroom/nestjs-libraries/database/prisma/prisma.service';
+import { TeamInvitationClaims, normalizeInvitationEmail } from '@gitroom/helpers/auth/team-invitation';
 import { Role, ShortLinkPreference, SubscriptionTier } from '@prisma/client';
 import { Injectable } from '@nestjs/common';
 import { AuthService } from '@gitroom/helpers/auth/auth.service';
@@ -11,8 +12,56 @@ export class OrganizationRepository {
   constructor(
     private _organization: PrismaRepository<'organization'>,
     private _userOrg: PrismaRepository<'userOrganization'>,
-    private _user: PrismaRepository<'user'>
+    private _user: PrismaRepository<'user'>,
+    private _prisma: PrismaService
   ) {}
+
+  createTeamInvitation(invite: TeamInvitationClaims) {
+    return this._prisma.teamInvitation.create({ data: {
+      id: invite.id, organizationId: invite.orgId, email: invite.email,
+      role: invite.role, expiresAt: new Date(invite.timeLimit),
+    } });
+  }
+
+  async pendingTeamInvitation(invite: TeamInvitationClaims) {
+    return !!(await this._prisma.teamInvitation.findFirst({ where: {
+      id: invite.id, organizationId: invite.orgId, email: invite.email,
+      role: invite.role, expiresAt: { gt: new Date() }, consumedAt: null,
+      organization: { deletedAt: null },
+    } }));
+  }
+
+  async acceptTeamInvitation(invite: TeamInvitationClaims, identity:
+    { kind: 'existing'; userId: string } |
+    { kind: 'new'; email: string; password: string; ip: string; userAgent: string }) {
+    return this._prisma.$transaction(async (tx) => {
+      const email = identity.kind === 'new' ? normalizeInvitationEmail(identity.email) :
+        (await tx.user.findUnique({ where: { id: identity.userId } }))?.email;
+      if (!email || normalizeInvitationEmail(email) !== invite.email) {
+        throw new Error('Invitation recipient does not match this account');
+      }
+      const org = await tx.organization.findFirst({ where: { id: invite.orgId, deletedAt: null } });
+      if (!org) throw new Error('Invitation organization is unavailable');
+      // The conditional update takes the row lock. Membership and consumption commit together.
+      const consumed = await tx.teamInvitation.updateMany({ where: {
+        id: invite.id, organizationId: invite.orgId, email: invite.email,
+        role: invite.role, expiresAt: { gt: new Date() }, consumedAt: null,
+      }, data: { consumedAt: new Date() } });
+      if (consumed.count !== 1) throw new Error('Invitation is expired or already used');
+      const user = identity.kind === 'new' ? await tx.user.create({ data: {
+        email, password: AuthService.hashPassword(identity.password), providerName: 'LOCAL',
+        activated: false, timezone: 0, ip: identity.ip, agent: identity.userAgent,
+      } }) : await tx.user.findUniqueOrThrow({ where: { id: identity.userId } });
+      if (identity.kind === 'existing' && (!user.activated || user.deletedAt)) {
+        throw new Error('An activated account is required');
+      }
+      const membership = await tx.userOrganization.create({ data: {
+        userId: user.id, organizationId: invite.orgId, role: invite.role,
+      } });
+      await tx.teamInvitation.update({ where: { id: invite.id }, data: { consumedBy: user.id } });
+      return { user, membership };
+    });
+  }
 
   createMaxUser(id: string, name: string, saasName: string, email: string) {
     return this._organization.model.organization.create({

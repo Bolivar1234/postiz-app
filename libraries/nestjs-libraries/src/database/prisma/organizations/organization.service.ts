@@ -10,6 +10,8 @@ import dayjs from 'dayjs';
 import { makeId } from '@gitroom/nestjs-libraries/services/make.is';
 import { Organization, ShortLinkPreference, User } from '@prisma/client';
 import { AutopostService } from '@gitroom/nestjs-libraries/database/prisma/autopost/autopost.service';
+import { TeamInvitationClaims, normalizeInvitationEmail } from '@gitroom/helpers/auth/team-invitation';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class OrganizationService {
@@ -38,13 +40,21 @@ export class OrganizationService {
     return this._organizationRepository.createMaxUser(id, name, saasName, email);
   }
 
-  addUserToOrg(
-    userId: string,
-    id: string,
-    orgId: string,
-    role: 'USER' | 'ADMIN'
-  ) {
-    return this._organizationRepository.addUserToOrg(userId, id, orgId, role);
+  pendingTeamInvitation(invite: TeamInvitationClaims) {
+    return this._organizationRepository.pendingTeamInvitation(invite);
+  }
+
+  async createInvitedUser(body: CreateOrgUserDto, invite: TeamInvitationClaims, ip: string, userAgent: string) {
+    if (!this._notificationsService.hasEmailProvider()) {
+      throw new Error('Email delivery must be configured before inviting new accounts');
+    }
+    return this._organizationRepository.acceptTeamInvitation(invite, {
+      kind: 'new', email: body.email, password: body.password, ip, userAgent,
+    });
+  }
+
+  async addUserToOrg(userId: string, invite: TeamInvitationClaims) {
+    return (await this._organizationRepository.acceptTeamInvitation(invite, { kind: 'existing', userId })).membership;
   }
 
   getOrgById(id: string) {
@@ -101,18 +111,24 @@ export class OrganizationService {
   }
 
   async inviteTeamMember(org: Organization, user: User, body: AddTeamMemberDto) {
-    const timeLimit = dayjs().add(2, 'day').format('YYYY-MM-DD HH:mm:ss');
-    const id = makeId(5);
+    if (body.sendEmail && !this._notificationsService.hasEmailProvider()) {
+      throw new Error('Email delivery must be configured before sending invitations');
+    }
+    const timeLimit = dayjs().add(2, 'day').toISOString();
+    const id = randomUUID();
+    const invite = {
+      purpose: 'team-invitation',
+      email: normalizeInvitationEmail(body.email),
+      role: body.role,
+      orgId: org.id,
+      timeLimit,
+      id,
+    } satisfies TeamInvitationClaims;
+    await this._organizationRepository.createTeamInvitation(invite);
     // only the invite fields, the body can carry undeclared properties
     const url =
       process.env.FRONTEND_URL +
-      `/?org=${AuthService.signJWT({
-        email: body.email,
-        role: body.role,
-        orgId: org.id,
-        timeLimit,
-        id,
-      })}`;
+      `/?org=${AuthService.signJWT(invite)}`;
     if (body.sendEmail) {
       const inviter = user.name
         ? `${user.name} (${user.email})`
