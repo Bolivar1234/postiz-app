@@ -6,6 +6,9 @@ on:
     branches: ['qwntik-v2.25.3']
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 concurrency:
   group: qwntik-invitations-${{ github.ref }}
   cancel-in-progress: true
