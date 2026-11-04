@@ -133,7 +133,7 @@ export class OrganizationService {
       const inviter = user.name
         ? `${user.name} (${user.email})`
         : user.email;
-      await this._notificationsService.sendEmail(
+      await this._notificationsService.sendRequiredEmail(
         body.email,
         `${user.name || user.email} invited you to join "${org.name}"`,
         `${inviter} has invited you to join the "${org.name}" team.<br /><a href="${url}">Accept the invitation</a> to get started.<br />The link will expire in 2 days.`

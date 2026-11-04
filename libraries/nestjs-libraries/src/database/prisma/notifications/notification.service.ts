@@ -111,6 +111,10 @@ export class NotificationService {
     await this._emailService.sendEmail(to, subject, html, 'top', replyTo);
   }
 
+  async sendRequiredEmail(to: string, subject: string, html: string) {
+    await this._emailService.sendEmailSync(to, subject, html, undefined, true);
+  }
+
   hasEmailProvider() {
     return this._emailService.hasProvider();
   }

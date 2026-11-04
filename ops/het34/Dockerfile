@@ -17,6 +17,7 @@ COPY libraries/nestjs-libraries/src/database/prisma/organizations/organization.r
 COPY libraries/nestjs-libraries/src/database/prisma/organizations/organization.service.ts /app/libraries/nestjs-libraries/src/database/prisma/organizations/organization.service.ts
 COPY libraries/nestjs-libraries/src/dtos/settings/add.team.member.dto.ts /app/libraries/nestjs-libraries/src/dtos/settings/add.team.member.dto.ts
 COPY libraries/nestjs-libraries/src/services/email.service.ts /app/libraries/nestjs-libraries/src/services/email.service.ts
+COPY libraries/nestjs-libraries/src/database/prisma/notifications/notification.service.ts /app/libraries/nestjs-libraries/src/database/prisma/notifications/notification.service.ts
 RUN pnpm exec prisma generate --schema libraries/nestjs-libraries/src/database/prisma/schema.prisma
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm run build:backend
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm run build:frontend

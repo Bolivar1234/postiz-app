@@ -10,6 +10,7 @@ const { AuthController } = require(`${root}/apps/backend/src/api/routes/auth.con
 const { UsersController } = require(`${root}/apps/backend/src/api/routes/users.controller.js`);
 const { AuthMiddleware } = require(`${root}/apps/backend/src/services/auth/auth.middleware.js`);
 const { EmailService } = require(`${root}/libraries/nestjs-libraries/src/services/email.service.js`);
+const { NotificationService } = require(`${root}/libraries/nestjs-libraries/src/database/prisma/notifications/notification.service.js`);
 const { CreateOrgUserDto } = require(`${root}/libraries/nestjs-libraries/src/dtos/auth/create.org.user.dto.js`);
 const { AuthService: Tokens } = require(`${root}/libraries/helpers/src/auth/auth.service.js`);
 const { parseTeamInvitation } = require(`${root}/libraries/helpers/src/auth/team-invitation.js`);
@@ -187,7 +188,8 @@ test('real Nest HTTP DTO/cookie boundary keeps signup closed and admits only val
   const { NestFactory } = require('@nestjs/core');
   const cookieParser = require('cookie-parser');
   class FixtureModule {}
-  Module({ controllers: [AuthController], providers: [{ provide: AuthService, useValue: auth }, { provide: EmailService, useValue: email }] })(FixtureModule);
+  const { ThrottlerModule } = require('@nestjs/throttler');
+  Module({ imports: [ThrottlerModule.forRoot([{ name: 'default', ttl: 60000, limit: 1000 }])], controllers: [AuthController], providers: [{ provide: AuthService, useValue: auth }, { provide: EmailService, useValue: email }] })(FixtureModule);
   const app = await NestFactory.create(FixtureModule, { logger: false });
   app.use(cookieParser()); app.useGlobalPipes(new ValidationPipe({ transform: true }));
   await app.listen(0, '127.0.0.1');
@@ -214,7 +216,11 @@ test('real Nest HTTP DTO/cookie boundary keeps signup closed and admits only val
       assert.match(html, /name="email"/);
       assert.match(html, /https:\/\/socials\.qwntik\.com\/api/);
     } finally {
-      frontend.kill('SIGTERM'); await new Promise(resolve => frontend.once('exit', resolve));
+      if (frontend.exitCode === null) {
+        frontend.kill('SIGTERM');
+        await Promise.race([new Promise(resolve => frontend.once('exit', resolve)), new Promise(resolve => setTimeout(resolve, 3000))]);
+        if (frontend.exitCode === null) frontend.kill('SIGKILL');
+      }
     }
 
     let r = await fetch(base + '/auth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -229,4 +235,21 @@ test('real Nest HTTP DTO/cookie boundary keeps signup closed and admits only val
     assert.equal(r.status, 200); assert.deepEqual(await r.json(), { activate: true });
     assert.equal(r.headers.get('set-cookie'), null);
   } finally { await app.close(); }
+});
+
+
+test('invitation send waits for actual EmailService outcome and never reports failed delivery as sent', async () => {
+  const actualEmail = new EmailService(null);
+  let accepted = false;
+  actualEmail.emailService = { name: 'isolated-invite-fixture', validateEnvKeys: [], async sendEmail() {
+    if (!accepted) throw Error('isolated invite transport failure');
+    return { id: 'isolated-invite-provider-accepted' };
+  } };
+  const actualNotifications = new NotificationService(null, actualEmail, repo, null);
+  const actualOrgs = new OrganizationService(repo, actualNotifications);
+  process.env.EMAIL_FROM_ADDRESS = 'fixture@example.invalid'; process.env.EMAIL_FROM_NAME = 'Isolated test';
+  await assert.rejects(() => actualOrgs.inviteTeamMember(a, owner, { email: 'invite-send@example.invalid', role: 'USER', sendEmail: true }), /email delivery failed/);
+  accepted = true;
+  const result = await actualOrgs.inviteTeamMember(a, owner, { email: 'invite-send@example.invalid', role: 'USER', sendEmail: true });
+  assert.ok(result.url); assert.equal(await db.user.count({ where: { email: 'invite-send@example.invalid' } }), 0);
 });
